@@ -6,11 +6,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 )
 
 func NewHandler(blockchain *Blockchain, nodeID string) http.Handler {
 	h := handler{blockchain, nodeID}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/nodes/register", buildResponse(h.RegisterNode))
 	mux.HandleFunc("/nodes/resolve", buildResponse(h.ResolveConflicts))
@@ -71,7 +71,6 @@ func (h *handler) AddTransaction(w io.Writer, r *http.Request) response {
 		log.Printf("there was an error when trying to add a transaction %v\n", err)
 		err = fmt.Errorf("fail to add transaction to the blockchain")
 	}
-
 	return response{resp, status, err}
 }
 
@@ -83,24 +82,59 @@ func (h *handler) Mine(w io.Writer, r *http.Request) response {
 			fmt.Errorf("method %s not allowd", r.Method),
 		}
 	}
-
 	log.Println("Mining some coins")
+	for {
+		blocks := make([]Block, 0)
+		for i := 0; i < 10; i++ {
+			// We run the proof of work algorithm to get the next proof...
+			lastBlock := h.blockchain.LastBlock()
+			previousHash := computeHashForBlock(lastBlock)
 
-	// We run the proof of work algorithm to get the next proof...
-	lastBlock := h.blockchain.LastBlock()
-	lastProof := lastBlock.Proof
-	proof := h.blockchain.ProofOfWork(lastProof)
+			newBlock := Block{
+				Index:        lastBlock.Index + 1,
+				Timestamp:    time.Now().UnixNano(),
+				Transactions: []Transaction{{Sender: "0", Recipient: fmt.Sprintf("No.%d", i), Amount: 1}},
+				PreviousHash: previousHash,
+			}
 
-	// We must receive a reward for finding the proof.
-	// The sender is "0" to signify that this node has mined a new coin.
-	newTX := Transaction{Sender: "0", Recipient: h.nodeId, Amount: 1}
-	h.blockchain.NewTransaction(newTX)
-
-	// Forge the new Block by adding it to the chain
-	block := h.blockchain.NewBlock(proof, "")
-
-	resp := map[string]interface{}{"message": "New Block Forged", "block": block}
-	return response{resp, http.StatusOK, nil}
+			h.blockchain.SetDifficulty(&newBlock)
+			blocks = append(blocks, newBlock)
+		}
+	Loop:
+		for {
+			for i := 0; i < 10; i++ {
+				if h.blockchain.ProofOfWork(&blocks[i], 10) {
+					h.blockchain.ValidateAndAppendNewBlock(blocks[i])
+					break Loop
+				}
+			}
+		}
+	}
+	return response{nil, http.StatusInternalServerError, nil}
+	//for {
+	//	// We run the proof of work algorithm to get the next proof...
+	//	lastBlock := h.blockchain.LastBlock()
+	//	previousHash := computeHashForBlock(lastBlock)
+	//
+	//	newBlock := Block{
+	//		Index:        lastBlock.Index + 1,
+	//		Timestamp:    time.Now().UnixNano(),
+	//		Transactions: []Transaction{{Sender: "0", Recipient: "1", Amount: 1}},
+	//		PreviousHash: previousHash,
+	//	}
+	//
+	//	h.blockchain.SetDifficulty(&newBlock)
+	//
+	//	h.blockchain.ProofOfWork(&newBlock)
+	//
+	//	// Forge the new Block by adding it to the chain
+	//	if h.blockchain.ValidateAndAppendNewBlock(newBlock) {
+	//		//resp := map[string]interface{}{"message": "New Block Forged", "block": newBlock}
+	//		//return response{resp, http.StatusOK, nil}
+	//	} else {
+	//		return response{nil, http.StatusInternalServerError, nil}
+	//	}
+	//}
 }
 
 func (h *handler) Blockchain(w io.Writer, r *http.Request) response {
